@@ -1,6 +1,5 @@
-# app.py
 # API unificada: Tuya IoT + EDA/IQR + XGBoost (GridSearchCV & Data Drift)
-# Versión: FINAL PRODUCCIÓN - Tabla Única, IA Cara Sucia, Fix Constraints y Endpoints IA
+# Versión: FINAL PRODUCCIÓN - Tabla Única, IA Cara Sucia, Fix Constraints, Endpoints IA y Fix Preprocesamiento
 
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
@@ -112,7 +111,7 @@ def get_tuya_data(device_id):
         return {"error": str(e), "success": False}
 
 # ==========================================
-# EDA E ICCA
+# EDA E ICCA (CORREGIDO PARA IGNORAR STRINGS)
 # ==========================================
 def clasificar_calidad_aire(pm25, pm10, co2):
     if pm25 is None or pm10 is None or co2 is None: return "Desconocido"
@@ -121,9 +120,17 @@ def clasificar_calidad_aire(pm25, pm10, co2):
     else: return "Moderado"
 
 def aplicar_eda_y_preprocesamiento(df):
-    df = df.interpolate(method='linear', limit_direction='both')
-    df = df.fillna(df.mean(numeric_only=True))
+    # 1. Asegurarnos estrictamente de que los sensores sean numéricos
+    for col in SENSORES_IA:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+    # 2. Interpolar y rellenar nulos SOLO en las columnas numéricas
+    if set(SENSORES_IA).issubset(df.columns):
+        df[SENSORES_IA] = df[SENSORES_IA].interpolate(method='linear', limit_direction='both')
+        df[SENSORES_IA] = df[SENSORES_IA].fillna(df[SENSORES_IA].mean())
     
+    # 3. Calcular Outliers con Rango Intercuartílico (IQR)
     for col in SENSORES_IA:
         if col in df.columns and len(df) >= CANTIDAD_MINIMA_ENTRENAMIENTO:
             Q1 = df[col].quantile(0.25)
@@ -237,7 +244,6 @@ def save_full_reading(device_id, full_data):
 
         conn.commit(); cur.close()
         
-        # FIX: Hora devuelta correctamente como string
         return {"success": True, "metric_id": m_id, "icca": categoria_icca, "recorded_at": str(naive_dt)}
     except Exception as e:
         if conn: conn.rollback()
@@ -261,12 +267,6 @@ def cargar_y_entrenar():
 
         logger.info(f"🧠 IA: Ejecutando GridSearchCV sobre {len(df)} datos de Cara Sucia...")
         
-        # --- ASEGURAR QUE LAS COLUMNAS DE IA SEAN NUMÉRICAS ---
-        for col in SENSORES_IA:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        # -----------------------------------------------------
-
         df = aplicar_eda_y_preprocesamiento(df)
 
         for s in SENSORES_IA:
@@ -296,7 +296,7 @@ def cargar_y_entrenar():
     except Exception as e:
         logger.error(f"❌ Error entrenamiento: {e}")
         return None, None
-    
+
 def monitor_ia_xgboost():
     modelo, columnas_X = None, None
     prediccion_actual = None
@@ -342,7 +342,6 @@ def monitor_ia_xgboost():
                         """, (registro['device_id'], prediccion_icca, v_real_pm25, v_pred_pm25, error, acertado))
                         conn.commit()
                         
-                        # Mensaje en consola agregado para que veas la predicción ocurrir cada hora
                         logger.info(f"🔮 PREDICCIÓN EVALUADA (Cara Sucia) -> Real PM2.5: {v_real_pm25:.2f} | Predicho: {v_pred_pm25:.2f} | ¿Acertó?: {acertado}")
 
                         errores_consecutivos = errores_consecutivos + 1 if not acertado else 0
@@ -369,16 +368,13 @@ def monitor_ia_xgboost():
 def periodic_save_job():
     while True:
         try:
-            # Consultamos datos a Tuya de Cara Sucia y los guardamos
             data = get_tuya_data(ID_CARA_SUCIA)
             if "error" not in data:
                 res = save_full_reading(ID_CARA_SUCIA, data)
-                # Extraemos la hora correctamente
                 hora_guardada = res.get('recorded_at') if isinstance(res, dict) else 'Desconocida'
                 logger.info(f"⏱️ Muestreo Guardado BD Única (Hora: {hora_guardada})")
         except Exception as e: 
             logger.error(f"Job Error: {e}")
-        # MODO PRODUCCIÓN: Verifica cada 10 minutos (Pero solo crea 1 ID nuevo por hora debido a la DB)
         time.sleep(10 * 60)
 
 # ==========================================
@@ -404,8 +400,6 @@ def api_info():
             "/api/historial": "Log de predicciones recientes"
         }
     })
-
-# --- NUEVOS ENDPOINTS INCORPORADOS DE LAS PRUEBAS ---
 
 @app.route('/api/metrics/all', methods=['GET'])
 def get_all_metrics():
@@ -493,8 +487,6 @@ def get_precision_ia():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
-
-# --- ENDPOINTS RESTANTES ---
 
 @app.route('/api/sensors/realtime', methods=['GET'])
 def get_all_realtime():
