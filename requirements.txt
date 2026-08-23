@@ -1,0 +1,9 @@
+Flask
+Flask-Cors
+requests
+pandas
+numpy
+joblib
+xgboost
+scikit-learn
+psycopg2-binary
