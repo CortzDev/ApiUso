@@ -260,6 +260,13 @@ def cargar_y_entrenar():
             return None, None
 
         logger.info(f"🧠 IA: Ejecutando GridSearchCV sobre {len(df)} datos de Cara Sucia...")
+        
+        # --- ASEGURAR QUE LAS COLUMNAS DE IA SEAN NUMÉRICAS ---
+        for col in SENSORES_IA:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        # -----------------------------------------------------
+
         df = aplicar_eda_y_preprocesamiento(df)
 
         for s in SENSORES_IA:
@@ -289,7 +296,7 @@ def cargar_y_entrenar():
     except Exception as e:
         logger.error(f"❌ Error entrenamiento: {e}")
         return None, None
-
+    
 def monitor_ia_xgboost():
     modelo, columnas_X = None, None
     prediccion_actual = None
