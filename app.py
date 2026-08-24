@@ -1,6 +1,3 @@
-# API unificada: Tuya IoT + EDA/IQR + XGBoost (GridSearchCV & Data Drift)
-# Versión: FINAL PRODUCCIÓN - Tabla Única, IA Cara Sucia, Fix Constraints, Endpoints IA y Fix Preprocesamiento
-
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 import hashlib
@@ -650,6 +647,17 @@ def historial():
         return jsonify(logs)
     except Exception as e: return jsonify({"error": str(e)}), 500
 
+
+@app.route('/api/sensors/live-direct', methods=['GET'])
+def get_live_direct():
+    device_id = request.args.get("device_id", ID_CARA_SUCIA)
+    # Petición directa a la nube de Tuya sin pasar por la BD
+    data = get_tuya_data(device_id)
+    if 'error' in data: 
+        return jsonify({"success": False, "error": data['error']}), 500
+    return jsonify({"success": True, "data": data.get("result", [])})
+
+    
 # ==========================================
 # INICIO AUTOMÁTICO
 # ==========================================
