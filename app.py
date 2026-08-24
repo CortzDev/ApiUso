@@ -108,7 +108,7 @@ def get_tuya_data(device_id):
         return {"error": str(e), "success": False}
 
 # ==========================================
-# EDA E ICCA (CORREGIDO PARA IGNORAR STRINGS)
+# EDA E ICCA
 # ==========================================
 def clasificar_calidad_aire(pm25, pm10, co2):
     if pm25 is None or pm10 is None or co2 is None: return "Desconocido"
@@ -117,17 +117,14 @@ def clasificar_calidad_aire(pm25, pm10, co2):
     else: return "Moderado"
 
 def aplicar_eda_y_preprocesamiento(df):
-    # 1. Asegurarnos estrictamente de que los sensores sean numéricos
     for col in SENSORES_IA:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
             
-    # 2. Interpolar y rellenar nulos SOLO en las columnas numéricas
     if set(SENSORES_IA).issubset(df.columns):
         df[SENSORES_IA] = df[SENSORES_IA].interpolate(method='linear', limit_direction='both')
         df[SENSORES_IA] = df[SENSORES_IA].fillna(df[SENSORES_IA].mean())
     
-    # 3. Calcular Outliers con Rango Intercuartílico (IQR)
     for col in SENSORES_IA:
         if col in df.columns and len(df) >= CANTIDAD_MINIMA_ENTRENAMIENTO:
             Q1 = df[col].quantile(0.25)
@@ -138,7 +135,7 @@ def aplicar_eda_y_preprocesamiento(df):
     return df
 
 # ==========================================
-# BASE DE DATOS Y GUARDADO (FIX CONSTRAINTS)
+# BASE DE DATOS Y GUARDADO
 # ==========================================
 def db_connect(): return psycopg2.connect(DATABASE_URL)
 
@@ -202,7 +199,6 @@ def save_full_reading(device_id, full_data):
     try:
         conn = db_connect(); cur = conn.cursor()
         
-        # MODO PRODUCCIÓN: Guardado cada hora en punto (00)
         recorded_at_now = datetime.now(ZoneInfo("America/El_Salvador"))
         naive_dt = recorded_at_now.replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
         
@@ -316,10 +312,10 @@ def monitor_ia_xgboost():
             conn = db_connect()
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             
-            if last_id == 0:
-                cursor.execute("SELECT id FROM registro_sensores WHERE device_id = %s ORDER BY id DESC LIMIT 1;", (ID_CARA_SUCIA,))
-                res = cursor.fetchone()
-                last_id = res['id'] if res else 0
+            # if last_id == 0:
+            #     cursor.execute("SELECT id FROM registro_sensores WHERE device_id = %s ORDER BY id DESC LIMIT 1;", (ID_CARA_SUCIA,))
+            #     res = cursor.fetchone()
+            #     last_id = res['id'] if res else 0
 
             cursor.execute("SELECT * FROM registro_sensores WHERE id > %s AND device_id = %s ORDER BY id ASC;", (last_id, ID_CARA_SUCIA))
             nuevos = cursor.fetchall()
@@ -372,15 +368,16 @@ def periodic_save_job():
                 logger.info(f"⏱️ Muestreo Guardado BD Única (Hora: {hora_guardada})")
         except Exception as e: 
             logger.error(f"Job Error: {e}")
-        time.sleep(10 * 60)
+        
+        time.sleep(60 * 60)
 
 # ==========================================
-# ENDPOINTS (Flask API - Adaptados a Tabla Única)
+# ENDPOINTS (Flask API)
 # ==========================================
 @app.route('/')
 def api_info():
     return jsonify({
-        "name": "Tuya Sensors API Unified (Tabla Única, Producción & IA Cara Sucia)",
+        "name": "Tuya Sensors API Unified",
         "version": "10.0 FINAL",
         "min_train_records": CANTIDAD_MINIMA_ENTRENAMIENTO,
         "endpoints": {
@@ -400,7 +397,10 @@ def api_info():
 
 @app.route('/api/metrics/all', methods=['GET'])
 def get_all_metrics():
-    limit = request.args.get('limit', type=int, default=50)
+    limit = request.args.get('limit', type=int, default=100)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
     try:
         conn = db_connect(); cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         datos_completos = {}
@@ -410,9 +410,20 @@ def get_all_metrics():
                        pm25_value, pm10, air_quality_index 
                 FROM registro_sensores 
                 WHERE device_id = %s 
-                ORDER BY recorded_at DESC LIMIT %s
             """
-            cur.execute(query, (dev_id, limit))
+            params = [dev_id]
+            
+            if start_date:
+                query += " AND recorded_at >= %s"
+                params.append(f"{start_date} 00:00:00")
+            if end_date:
+                query += " AND recorded_at <= %s"
+                params.append(f"{end_date} 23:59:59")
+                
+            query += " ORDER BY recorded_at DESC LIMIT %s"
+            params.append(limit)
+
+            cur.execute(query, tuple(params))
             rows = cur.fetchall()
             
             if rows:
